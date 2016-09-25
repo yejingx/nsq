@@ -27,6 +27,7 @@ type Message struct {
 	pri        int64
 	index      int
 	deferred   time.Duration
+	channel    string
 }
 
 func NewMessage(id MessageID, body []byte) *Message {
@@ -34,6 +35,7 @@ func NewMessage(id MessageID, body []byte) *Message {
 		ID:        id,
 		Body:      body,
 		Timestamp: time.Now().UnixNano(),
+		channel:   "",
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 
 var (
 	topic     = flag.String("topic", "", "NSQ topic to publish to")
+	channel   = flag.String("channel", "", "topic channel to publish to")
 	delimiter = flag.String("delimiter", "\n", "character to split input from stdin")
 
 	destNsqdTCPAddrs = app.StringArray{}
@@ -134,7 +135,12 @@ func readAndPublish(r *bufio.Reader, delim byte, producers map[string]*nsq.Produ
 	}
 
 	for _, producer := range producers {
-		err := producer.Publish(*topic, line)
+		var err error
+		if *channel == "" {
+			err = producer.Publish(*topic, line)
+		} else {
+			err = producer.PublishChannel(*topic, *channel, line)
+		}
 		if err != nil {
 			return err
 		}

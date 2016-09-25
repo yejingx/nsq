@@ -236,8 +236,17 @@ func (s *httpServer) doPUB(w http.ResponseWriter, req *http.Request, ps httprout
 		}
 	}
 
+	channelName := ""
+	if chn, ok := reqParams["channel"]; ok {
+		if !protocol.IsValidChannelName(chn[0]) {
+			return nil, http_api.Err{400, "INVALID_CHANNEL"}
+		}
+		channelName = chn[0]
+	}
+
 	msg := NewMessage(<-s.ctx.nsqd.idChan, body)
 	msg.deferred = deferred
+	msg.channel = channelName
 	err = topic.PutMessage(msg)
 	if err != nil {
 		return nil, http_api.Err{503, "EXITING"}
@@ -306,6 +315,18 @@ func (s *httpServer) doMPUB(w http.ResponseWriter, req *http.Request, ps httprou
 
 			msg := NewMessage(<-s.ctx.nsqd.idChan, block)
 			msgs = append(msgs, msg)
+		}
+	}
+
+	if chn, ok := reqParams["channel"]; ok {
+		channelName := chn[0]
+
+		if !protocol.IsValidChannelName(chn[0]) {
+			return nil, http_api.Err{400, "INVALID_CHANNEL"}
+		}
+
+		for _, m := range msgs {
+			m.channel = channelName
 		}
 	}
 

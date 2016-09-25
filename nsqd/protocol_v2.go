@@ -185,8 +185,12 @@ func (p *protocolV2) Exec(client *clientV2, params [][]byte) ([]byte, error) {
 		return p.REQ(client, params)
 	case bytes.Equal(params[0], []byte("PUB")):
 		return p.PUB(client, params)
+	case bytes.Equal(params[0], []byte("PUBC")):
+		return p.PUBC(client, params)
 	case bytes.Equal(params[0], []byte("MPUB")):
 		return p.MPUB(client, params)
+	case bytes.Equal(params[0], []byte("MPUBC")):
+		return p.MPUBC(client, params)
 	case bytes.Equal(params[0], []byte("DPUB")):
 		return p.DPUB(client, params)
 	case bytes.Equal(params[0], []byte("NOP")):
@@ -790,6 +794,61 @@ func (p *protocolV2) PUB(client *clientV2, params [][]byte) ([]byte, error) {
 	return okBytes, nil
 }
 
+func (p *protocolV2) PUBC(client *clientV2, params [][]byte) ([]byte, error) {
+	var err error
+
+	if len(params) < 3 {
+		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "PUBC insufficient number of parameters")
+	}
+
+	topicName := string(params[1])
+	if !protocol.IsValidTopicName(topicName) {
+		return nil, protocol.NewFatalClientErr(nil, "E_BAD_TOPIC",
+			fmt.Sprintf("PUBC topic name %q is not valid", topicName))
+	}
+
+	channelName := string(params[2])
+	if !protocol.IsValidChannelName(channelName) {
+		return nil, protocol.NewFatalClientErr(nil, "E_BAD_CHANNEL",
+			fmt.Sprintf("PUBC channel name %q is not valid", channelName))
+	}
+
+	bodyLen, err := readLen(client.Reader, client.lenSlice)
+	if err != nil {
+		return nil, protocol.NewFatalClientErr(err, "E_BAD_MESSAGE", "PUBC failed to read message body size")
+	}
+
+	if bodyLen <= 0 {
+		return nil, protocol.NewFatalClientErr(nil, "E_BAD_MESSAGE",
+			fmt.Sprintf("PUBC invalid message body size %d", bodyLen))
+	}
+
+	if int64(bodyLen) > p.ctx.nsqd.getOpts().MaxMsgSize {
+		return nil, protocol.NewFatalClientErr(nil, "E_BAD_MESSAGE",
+			fmt.Sprintf("PUBC message too big %d > %d", bodyLen, p.ctx.nsqd.getOpts().MaxMsgSize))
+	}
+
+	messageBody := make([]byte, bodyLen)
+	_, err = io.ReadFull(client.Reader, messageBody)
+	if err != nil {
+		return nil, protocol.NewFatalClientErr(err, "E_BAD_MESSAGE", "PUBC failed to read message body")
+	}
+
+	if err := p.CheckAuth(client, "PUBC", topicName, ""); err != nil {
+		return nil, err
+	}
+
+	topic := p.ctx.nsqd.GetTopic(topicName)
+	msg := NewMessage(<-p.ctx.nsqd.idChan, messageBody)
+	msg.channel = channelName
+	err = topic.PutMessage(msg)
+	if err != nil {
+		return nil, protocol.NewFatalClientErr(err, "E_PUB_FAILED", "PUBC failed "+err.Error())
+	}
+
+	return okBytes, nil
+}
+
 func (p *protocolV2) MPUB(client *clientV2, params [][]byte) ([]byte, error) {
 	var err error
 
@@ -836,6 +895,67 @@ func (p *protocolV2) MPUB(client *clientV2, params [][]byte) ([]byte, error) {
 	err = topic.PutMessages(messages)
 	if err != nil {
 		return nil, protocol.NewFatalClientErr(err, "E_MPUB_FAILED", "MPUB failed "+err.Error())
+	}
+
+	return okBytes, nil
+}
+
+func (p *protocolV2) MPUBC(client *clientV2, params [][]byte) ([]byte, error) {
+	var err error
+
+	if len(params) < 3 {
+		return nil, protocol.NewFatalClientErr(nil, "E_INVALID", "MPUBC insufficient number of parameters")
+	}
+
+	topicName := string(params[1])
+	if !protocol.IsValidTopicName(topicName) {
+		return nil, protocol.NewFatalClientErr(nil, "E_BAD_TOPIC",
+			fmt.Sprintf("E_BAD_TOPIC MPUBC topic name %q is not valid", topicName))
+	}
+
+	channelName := string(params[2])
+	if !protocol.IsValidChannelName(channelName) {
+		return nil, protocol.NewFatalClientErr(nil, "E_BAD_CHANNEL",
+			fmt.Sprintf("MPUBC channel name %q is not valid", channelName))
+	}
+
+	bodyLen, err := readLen(client.Reader, client.lenSlice)
+	if err != nil {
+		return nil, protocol.NewFatalClientErr(err, "E_BAD_BODY", "MPUBC failed to read body size")
+	}
+
+	if bodyLen <= 0 {
+		return nil, protocol.NewFatalClientErr(nil, "E_BAD_BODY",
+			fmt.Sprintf("MPUBC invalid body size %d", bodyLen))
+	}
+
+	if int64(bodyLen) > p.ctx.nsqd.getOpts().MaxBodySize {
+		return nil, protocol.NewFatalClientErr(nil, "E_BAD_BODY",
+			fmt.Sprintf("MPUBC body too big %d > %d", bodyLen, p.ctx.nsqd.getOpts().MaxBodySize))
+	}
+
+	messages, err := readMPUB(client.Reader, client.lenSlice, p.ctx.nsqd.idChan,
+		p.ctx.nsqd.getOpts().MaxMsgSize)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := p.CheckAuth(client, "MPUBC", topicName, ""); err != nil {
+		return nil, err
+	}
+
+	topic := p.ctx.nsqd.GetTopic(topicName)
+
+	for _, m := range messages {
+		m.channel = channelName
+	}
+
+	// if we've made it this far we've validated all the input,
+	// the only possible error is that the topic is exiting during
+	// this next call (and no messages will be queued in that case)
+	err = topic.PutMessages(messages)
+	if err != nil {
+		return nil, protocol.NewFatalClientErr(err, "E_MPUB_FAILED", "MPUBC failed "+err.Error())
 	}
 
 	return okBytes, nil

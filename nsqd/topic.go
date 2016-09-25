@@ -263,27 +263,47 @@ func (t *Topic) messagePump() {
 			goto exit
 		}
 
-		for i, channel := range chans {
-			chanMsg := msg
-			// copy the message because each channel
-			// needs a unique instance but...
-			// fastpath to avoid copy if its the first channel
-			// (the topic already created the first copy)
-			if i > 0 {
-				chanMsg = NewMessage(msg.ID, msg.Body)
-				chanMsg.Timestamp = msg.Timestamp
-				chanMsg.deferred = msg.deferred
+		if msg.channel == "" {
+			for i, channel := range chans {
+				chanMsg := msg
+				// copy the message because each channel
+				// needs a unique instance but...
+				// fastpath to avoid copy if its the first channel
+				// (the topic already created the first copy)
+				if i > 0 {
+					chanMsg = NewMessage(msg.ID, msg.Body)
+					chanMsg.Timestamp = msg.Timestamp
+					chanMsg.deferred = msg.deferred
+				}
+				if chanMsg.deferred != 0 {
+					channel.StartDeferredTimeout(chanMsg, chanMsg.deferred)
+					continue
+				}
+				err := channel.PutMessage(chanMsg)
+				if err != nil {
+					t.ctx.nsqd.logf(
+						"TOPIC(%s) ERROR: failed to put msg(%s) to channel(%s) - %s",
+						t.name, msg.ID, channel.name, err)
+				}
 			}
-			if chanMsg.deferred != 0 {
-				channel.StartDeferredTimeout(chanMsg, chanMsg.deferred)
+		} else {
+			channel, ok := t.channelMap[msg.channel]
+			if !ok {
+				if channel, ok = t.channelMap["__default__"]; !ok {
+					continue
+				}
+			}
+
+			if msg.deferred != 0 {
+				channel.StartDeferredTimeout(msg, msg.deferred)
 				continue
 			}
-			err := channel.PutMessage(chanMsg)
-			if err != nil {
+			if err := channel.PutMessage(msg); err != nil {
 				t.ctx.nsqd.logf(
 					"TOPIC(%s) ERROR: failed to put msg(%s) to channel(%s) - %s",
 					t.name, msg.ID, channel.name, err)
 			}
+
 		}
 	}
 
